@@ -1,0 +1,514 @@
+---
+title: "415Project"
+author: "JM"
+date: "3/30/2019"
+output: html_document
+---
+
+#1.Loading Data
+```{r }
+gg = read.csv("googleplaystore.csv")
+review = read.csv("googleplaystore_user_reviews.csv")
+library(e1071)
+library(tidyverse)
+review1 = review %>% select(App, Translated_Review)
+head(review1)
+knitr::kable(head(review1))
+head(review)
+head(gg)
+
+
+```
+
+#2.Data Preprocessing
+```{r}
+str(gg)
+```
+
+There are a lot of factor variables which should actually be converted to numeric variables.
+
+##2.1Converting variable types
+```{r}
+library(lubridate)
+library(tidyverse)
+gg.new <- gg %>%
+  mutate(
+    # Eliminate "+" to transform Installs to numeric variable
+   # Installs = gsub("\\+", "", as.character(Installs)),
+   # Installs = as.numeric(gsub(",", "", Installs)),
+    # Eliminate "M" to transform Size to numeric variable
+    Size = gsub("M", "", Size),
+    # For cells with k, divide it by 1024, since 1024kB = 1MB, the unit for size is MB
+    Size = ifelse(grepl("k", Size),as.numeric(gsub("k", "", Size))/1024, as.numeric(Size)),
+    # Transform reviews to numeric
+    Reviews = as.numeric(Reviews),
+    # Remove "$" from Price to transform it to numeric
+    Price = as.numeric(gsub("\\$", "", as.character(Price))),
+    # Convert Last Updated to date format
+    Last.Updated = mdy(Last.Updated),
+    # Replace "Varies with device" to NA since it is unknown
+    Min.Android.Ver = gsub("Varies with device", NA, Android.Ver),
+    # Keep only version number to 1 decimal as it's most representatice
+    Min.Android.Ver = as.numeric(substr(Min.Android.Ver, start = 1, stop = 3)),
+    # Drop old Android version column
+    Android.Ver = NULL
+  ) 
+
+#%>%
+  #filter(
+    ## Two apps had type as 0 or NA, they will be removed 
+    #Type %in% c("Free", "Paid")
+  #)
+
+```
+
+
+```{r}
+str(gg.new)
+```
+```{r}
+options(scipen=999)
+table(gg.new$Installs)
+gg.new$Installs%>%str()
+gg.new %>% filter(Installs == "500,000") %>% print
+```
+
+```{r}
+library(highcharter)
+gg.new %>% select(-Min.Android.Ver) %>% 
+    summarise_all(
+        funs(sum(is.na(.)))
+    ) %>%
+  gather() %>%
+  # Only show columns with NA
+  filter(value> 1) %>%
+  arrange(-value) %>%
+    hchart('column', hcaes(x = 'key', y = 'value', color = 'key')) %>%
+  hc_add_theme(hc_theme_elementary()) %>%
+  hc_title(text = "Columns with Missing Value")
+```
+
+
+### Most popular category 
+```{r}
+gg.new1 <- gg %>%
+  mutate(
+    # Eliminate "+" to transform Installs to numeric variable
+    Installs = gsub("\\+", "", as.character(Installs)),
+    Installs = as.numeric(gsub(",", "", Installs)),
+    # Eliminate "M" to transform Size to numeric variable
+    Size = gsub("M", "", Size),
+    # For cells with k, divide it by 1024, since 1024kB = 1MB, the unit for size is MB
+    Size = ifelse(grepl("k", Size),as.numeric(gsub("k", "", Size))/1024, as.numeric(Size)),
+    # Transform reviews to numeric
+    Reviews = as.numeric(Reviews),
+    # Remove "$" from Price to transform it to numeric
+    Price = as.numeric(gsub("\\$", "", as.character(Price))),
+    # Convert Last Updated to date format
+    Last.Updated = mdy(Last.Updated),
+    # Replace "Varies with device" to NA since it is unknown
+    Min.Android.Ver = gsub("Varies with device", NA, Android.Ver),
+    # Keep only version number to 1 decimal as it's most representatice
+    Min.Android.Ver = as.numeric(substr(Min.Android.Ver, start = 1, stop = 3)),
+    # Drop old Android version column
+    Android.Ver = NULL
+  )
+
+gg.new2 = gg.new1 %>% mutate(Interval = difftime(time1 = today(), time2 = Last.Updated)) %>% print
+ggplot(gg.new2) + geom_line(aes(x = Interval, y = Installs)) + labs(x = "Days Since Last Update", y = "Installments")
+
+```
+
+
+```{r}
+gg.new1 %>% 
+  group_by(Category) %>% filter(Category != 1.9) %>% 
+  summarize(
+    TotalInstalls = sum(as.numeric(Installs))
+  ) %>%
+  arrange(-TotalInstalls) %>%
+  hchart('scatter', hcaes(x = "Category", y = "TotalInstalls", size = "TotalInstalls", color = "Category")) %>%
+  hc_add_theme(hc_theme_538()) %>%
+  hc_title(text = "Most popular categories")
+
+```
+
+###Correlation map
+```{r}
+head(iris)
+library(reshape2)
+
+df_cor = iris[,2:3]
+cormat <- round(cor(df_cor),2) 
+melted_cormat <- melt(cormat)
+ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "yellow", high = "purple", mid = "red",
+   midpoint = 0, limit = c(-1,1), space = "Lab",
+   name="Pearson\nCorrelation") +
+  theme_minimal()+
+ theme(axis.text.x = element_text(angle = 45, vjust = 1,
+    size = 12, hjust = 1))+
+ coord_fixed()
+```
+
+
+
+##2.2Divide Installs into 3 categories 
+```{r}
+library(tidyverse)
+options(scipen=999)
+# write function to convert installment
+convert_install = function(data, installment) {
+  #install.levels = factor(c("low", "medium", "high"))
+  
+  if (installment %in% c("0", "1", "50", "100", "500", "1,000", "5,000", "10,000", "50,000")) {
+  Installs.cat = "low"
+  }
+  else if (installment %in% c ("100,000", "500,000", "1,000,000", "5,000,000")){
+    Installs.cat = "medium"
+  }
+  else {
+      Installs.cat = "high"
+  }
+
+}
+
+
+#gg.new = gg.new %>% filter(!is.na(Installs)) %>% mutate(Installs.cat = factor(convert_install(gg.new, Installs), # levels = c("low", "medium", "high")))
+sum((gg.new$Installs) %in% "10,000")
+# gg.new = gg.new %>% mutate(Installs.cat = "1")
+str(gg.new)
+table(gg.new$Installs)
+table(gg.new$Installs.cat)
+
+gg.new = gg.new %>% filter(Installs != "Free") %>% mutate(
+  Installs.cat = fct_collapse(Installs, 
+                              low = c("Free","0", "0+","1+", "5+", "10+","100+", "50+", "100+", "500+", "1,000+", "5,000+"), 
+                              medium = c("10,000+", "50,000+", "100,000+", "500,000+"), 
+                              high = c("1,000,000+", "5,000,000+", "1,000,000,000+", "10,000,000+", "100,000,000+", "50,000,000+", "500,000,000+")))
+table(gg.new$Installs.cat)
+```
+
+### boxplot of different Installment categories
+```{r}
+ggplot(data = gg.new) +
+  geom_boxplot(aes(x = reorder(Installs.cat, -Rating), y = Rating)) + 
+  labs(x = "Installment Categories",y = "Rating")
+
+```
+
+
+
+##2.3 Delete duplicated rows
+```{r}
+# number of observations before deleting duplicated rows
+(original_num_rows = nrow(gg.new))
+gg.new.uniq = gg.new %>% distinct
+# number of rows after delete duplicated rows
+(uniq_num_rows = nrow(gg.new.uniq))
+# number of duplicated rows
+(dup_rows = original_num_rows - uniq_num_rows)
+```
+
+##2.4 Merge Category into 6 
+```{r}
+# gg.new.uniq %>% filter (!is.na(Category)) %>% print
+levels(gg.new.uniq$Category)
+```
+
+```{r}
+mydata1 = gg.new.uniq %>% filter(Category != 1.9) %>% mutate(Cat.cat = fct_collapse(Category,
+                                                        Education = c("EDUCATION", "BOOKS_AND_REFERENCE", "LIBRARIES_AND_DEMO", "ART_AND_DESIGN"),
+                                                        Personalization = c("PERSONALIZATION", "BEAUTY", "SHOPPING", "DATING", "PHOTOGRAPHY"),
+                                                        Lifestyle = c("HEALTH_AND_FITNESS", "MEDICAL", "LIFESTYLE", "SPORTS", "FOOD_AND_DRINK"),
+                                                        Family = c("FAMILY", "PARENTING", "HOUSE_AND_HOME", "1.9"),
+                                                        Entertainment = c("ENTERTAINMENT", "GAME", "COMICS", "VIDEO_PLAYERS"), 
+                                                        Business = c("BUSINESS", "FINANCE", "PRODUCTIVITY", "TOOLS", "NEWS_AND_MAGAZINES", "EVENTS", "SOCIAL", "COMMUNICATION"),
+                                                        Travel = c("MAPS_AND_NAVIGATION", "AUTO_AND_VEHICLES", "TRAVEL_AND_LOCAL", "WEATHER")))
+```
+
+```{r}
+
+mydata2 = mydata1 %>% mutate(Interval = difftime(time1 = today(), time2 = Last.Updated))
+str(mydata2)
+mydata2 %>% filter(Installs.cat == "low") %>% print
+
+```
+
+#### Impute missing values
+```{r}
+#missForest
+library(missForest)
+
+
+#impute missing values, using all parameters as default values
+gg.new.imp <- missForest(data.matrix(mydata2), maxiter = 5, ntree = 10)
+
+#check imputed values
+# gg.new.imp$ximp
+
+#check imputation error
+gg.new.imp$OOBerror
+
+```
+
+
+#### get the semantic score
+```{r}
+# install.packages("stringr")
+# install.packages("tidytext")
+library(stringr)
+library(tidytext)
+```
+
+```{r}
+# read in user reviews
+user_review = read.csv("googleplaystore_user_reviews.csv")
+str(user_review)
+user_review %>% print
+head(user_review)
+
+# get sentiment data frame
+sents = get_sentiments("afinn") %>% print
+# range(sents$score)
+```
+
+```{r}
+# left join the sentiment chart and the user reviews to get score
+t1 = user_review %>% mutate(review = as.character(Translated_Review)) %>% unnest_tokens(word, review)
+# t2 = user_review[1:500, ]
+user_score = left_join(t1, sents) %>% group_by(App) %>% summarise(n = n(), score=sum(score, na.rm=T)) %>% mutate(avg.score = score / n) %>% print
+# range(user_score $ avg.score)
+```
+
+
+```{r}
+user_review %>% group_by(App) %>% count
+
+t11 = user_score %>% inner_join(gg.new) %>% filter(Installs != 5000) %>% filter(Installs != 1000000000)
+ggplot(t11) + geom_line(aes(x = Installs, y = avg.score))
+
+ggplot(t11) + geom_boxplot(aes(x = reorder(as.factor(Installs), -avg.score), y = avg.score)) + labs(x = "Installments", y = "Average Score") + coord_flip()
+
+```
+```{r}
+# recover app name after data imputation
+# add num_row to gg.new
+mydata2 = mydata2 %>% mutate(r = row_number()) 
+# split data into training and test data
+# change the list to data frame 
+
+gg.df = gg.new.imp[[1]] %>% unlist()
+gg.data = data.frame(gg.df) %>% mutate(r = row_number()) 
+
+t1 = left_join(gg.data, mydata2, by = "r") %>% 
+  select(Rating.x, Reviews.y, Size.x, Installs.cat.y, Price.y, Content.Rating.y, Cat.cat.y, Interval.y) %>% print
+
+
+
+
+# split data
+(total_row = nrow(t1))
+
+ins.l= which(t1$Installs.cat.y == "low")
+ins.m= which(t1$Installs.cat.y == "medium")
+ins.h= which(t1$Installs.cat.y == "high")
+
+train.id = c(sample(ins.l, size = trunc(0.8 *length(ins.l))),
+             sample(ins.m, size = trunc(0.8 *length(ins.m))), 
+             sample(ins.h, size = trunc(0.8 *length(ins.h))))
+
+
+
+train.gg = t1[train.id, ]
+
+test.gg = t1[-train.id, ]
+
+
+levels(train.gg$`Installs`)
+table(train.gg$`Installs`)
+```
+
+
+```{r}
+# random forest
+set.seed(415)
+library(randomForest)
+table(factor(train.gg$Installs.cat.y))
+bag.gg=randomForest(Installs.cat.y~., data=train.gg, mtry = ncol(train.gg) - 1,importance=TRUE)
+bag.gg
+
+# plot
+yhat.bag = predict(bag.gg, newdata=test.gg) 
+# test error
+(forest.test.err = mean(yhat.bag != test.gg$Installs.cat.y))
+
+# get the importance
+importance(bag.gg)
+varImpPlot(bag.gg)
+
+
+
+```
+
+```{r}
+# tree
+set.seed(415)
+library(tree)
+#train.gg
+#colnames(train.gg)[1] = "Rating"
+#colnames(train.gg)[2] = "Reviews"
+#colnames(train.gg)[3] = "Size"
+#colnames(train.gg)[5] = "Price"
+#colnames(train.gg)[6] = "Content Rating"
+#colnames(train.gg)[7] = "Category"
+#colnames(train.gg)[1] = "Time Since Last Update"
+#train.gg
+train.gg
+tree.gg = tree(Installs.cat.y~., data = train.gg)
+summary(tree.gg)
+plot(tree.gg)
+text(tree.gg, pretty = 1, cex = 1)
+
+yhat.tree = predict(tree.gg, newdata=test.gg) 
+# test error
+(tree.test.err = mean(yhat.tree != test.gg$Installs.cat.y))
+```
+ 
+
+
+```{r}
+# prune the tree
+cv.gg.tree=cv.tree(tree.gg,FUN=prune.misclass)
+cv.gg.tree
+
+# par(mfrow=c(1,2))
+# plot(cv.gg.tree$size,cv.gg.tree$dev / length(train.gg),ylab="cv error", xlab="size",type="b")
+# plot(cv.gg.tree$k, cv.gg.tree$dev / length(train.gg),ylab="cv error", xlab="k",type="b")
+
+# predict using pruning tree
+prune.tree=prune.misclass(tree.gg,best=8)
+tree.pred=predict(prune.tree, test.gg,type="class")
+table(tree.pred, test.gg$Installs.cat.y)
+(test.tree.err = mean(tree.pred != test.gg$Installs.cat.y)) 
+
+# plot the tree
+plot(prune.tree)
+text(prune.tree, pretty = 0, cex = 1)
+```
+
+As we can see in both single tree and random forest, reviews is the most important predictor. When we dig into the reviews, we figure out that approxiamtely 1000 apps have more than 100 relevant text reviews / comments. 
+
+#### SVM on traning set
+```{r}
+set.seed(415)
+# get data frame ready to use
+train.gg
+table(factor(train.gg$Installs.cat.y))
+costVals = c(1, 5, 10, 50)
+# linear kernel
+# running too slow, be careful to change predictors
+svm1 <- tune(svm, as.factor(Installs.cat.y) ~ ., data = train.gg,
+             kernel = "linear",
+             ranges = list("cost" = costVals)) 
+summary(svm1)
+# find the best cost under linear kernel
+best_mod_linear = svm1$best.model
+summary(best_mod_linear)
+
+# thus the cost of the best model si 50.
+```
+
+```{r}
+# get the test error of the best model of the linear kernel
+test.gg %>% str()
+pred_test_linear = predict(best_mod_linear, newdata = test.gg)
+table(predict = pred_test_linear, truth = test.gg$Installs.cat.y)
+(test_err_linear = mean(pred_test_linear != test.gg$Installs.cat.y))
+
+```
+
+```{r}
+set.seed(415)
+# kernel radial
+gammaVals = c(1, 2, 3, 4)
+svm_radial <-tune(svm, as.factor(Installs.cat.y) ~ ., data = train.gg, 
+                  kernel = "radial",
+                  cost = 100,
+                               gamma =gammaVals)
+summary(svm_radial)
+```
+
+```{r}
+best_mod_radial = svm_radial$best.model
+summary(best_mod_radial)
+
+```
+
+```{r}
+# get test error of kernel of the radial
+pred_test_radial = predict(best_mod_radial, newdata = test.gg)
+(test_err_radial = mean(pred_test_radial != test.gg$Installs.cat.y))
+
+```
+
+
+
+
+
+
+
+Is it true that people tends to give text review when they highly positively review the app?
+```{r}
+# left join the user_score table and t3
+mydata2 = mydata2 %>% mutate(r = row_number()) %>% print 
+gg.df = gg.new.imp[[1]] %>% unlist()
+gg.data = data.frame(gg.df) %>% mutate(r = row_number()) %>% print
+
+t3 = left_join(gg.data, mydata2, by = "r") %>% 
+  select(Rating.x, Reviews.y, App.y, Installs.cat.y) %>% print
+colnames(t3)[3] = "App"
+t2 = inner_join(user_score, t3, by = "App") %>% print
+
+# raing and avg score
+# add main title manually, which is "rating vs aaverage sentimental score"
+ggplot(data = t2, aes(x = Rating.x, y = avg.score)) + geom_bar(stat = "identity") + labs(x = "Rating", y = "Average Sentimental Score", title = "Rating vs Average sentimental Score") 
+
+ggplot(data = t2, aes(x = as.factor(Installs.cat.y), y = avg.score)) + geom_boxplot() + labs(x = "Installment Category", y = "Average Sentimental Score")
+
+boxplot(t2$Installs.cat.y ~ t2$avg.score)
+# rating vs reviews
+#ggplot(data = t2, aes(x = Reviews.y, y = avg.score)) + geom_bar(stat = "identity") + labs(x = "Number of #Reviews", y = "Average Sentimental Score", title = "Number of Reviews vs Average sentimental Score") 
+
+
+```
+
+High avg score tends to concentrated at rating above and including 4.0
+
+
+
+
+
+
+
+
+
+
+#### data frame that might not be used
+```{r}
+final1 = left_join(gg.data, mydata2, by = "r") %>% select(App.y, Reviews.y, Rating.x, Interval.y, Size.x, Price.y, Cat.cat.y, Content.Rating.y) %>% print
+colnames(final1)[1] = "App"
+colnames(final1)[2] = "Reviews"
+colnames(final1)[3] = "Rating"
+colnames(final1)[4] = "Interval"
+colnames(final1)[5] = "Size"
+colnames(final1)[6] = "Price"
+colnames(final1)[7] = "Category"
+colnames(final1)[8] = "Content"
+
+
+```
+
+
+
