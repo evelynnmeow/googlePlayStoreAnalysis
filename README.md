@@ -1,0 +1,2 @@
+# googlePlayStoreAnalysis
+This project consists of 7 parts: data collection and cleaning, visualization, missing value imputation, feature engineering, classification and model comparison, conclusion, and limitations.  We will select the best model that is able to predict the number of installments of Apps most accurately and figure out what characters that will influence the installments of a certain App. 
